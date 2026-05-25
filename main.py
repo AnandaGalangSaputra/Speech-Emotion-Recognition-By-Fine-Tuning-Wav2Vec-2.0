@@ -8,6 +8,9 @@ import librosa.display
 import matplotlib.pyplot as plt
 import numpy as np
 
+import tempfile
+import os
+
 from transformers import (
     Wav2Vec2FeatureExtractor,
     AutoModelForAudioClassification
@@ -34,8 +37,9 @@ st.write(
 
 MODEL_NAME = "alianurrahman/wav2vec2-base-indonesian-speech-emotion-recognition"
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
+device = torch.device(
+    "cuda" if torch.cuda.is_available() else "cpu"
+)
 
 @st.cache_resource
 def load_model():
@@ -52,7 +56,6 @@ def load_model():
 
     return feature_extractor, model
 
-
 feature_extractor, model = load_model()
 
 # =========================
@@ -60,8 +63,8 @@ feature_extractor, model = load_model()
 # =========================
 
 uploaded_file = st.file_uploader(
-    "Upload Audio WAV",
-    type=["wav"]
+    "Upload Audio File",
+    type=["wav", "mp3"]
 )
 
 # =========================
@@ -72,110 +75,183 @@ if uploaded_file is not None:
 
     st.audio(uploaded_file)
 
-    with open("temp.wav", "wb") as f:
-        f.write(uploaded_file.read())
+    try:
 
-    audio, sr = librosa.load("temp.wav", sr=16000)
+        # =========================
+        # SAVE TEMP FILE
+        # =========================
 
-    # =========================
-    # WAVEFORM
-    # =========================
+        file_extension = uploaded_file.name.split(".")[-1]
 
-    st.subheader("Waveform")
+        with tempfile.NamedTemporaryFile(
+            delete=False,
+            suffix=f".{file_extension}"
+        ) as temp_file:
 
-    fig_wave, ax = plt.subplots(figsize=(12,4))
+            temp_file.write(uploaded_file.read())
 
-    librosa.display.waveshow(
-        audio,
-        sr=sr,
-        ax=ax
-    )
+            temp_path = temp_file.name
 
-    st.pyplot(fig_wave)
+        # =========================
+        # LOAD AUDIO
+        # =========================
 
-    # =========================
-    # SPECTROGRAM
-    # =========================
+        audio, sr = librosa.load(
+            temp_path,
+            sr=16000
+        )
 
-    st.subheader("Spectrogram")
+        st.success("Audio berhasil diproses")
 
-    spectrogram = librosa.amplitude_to_db(
-        np.abs(librosa.stft(audio)),
-        ref=np.max
-    )
+        # =========================
+        # AUDIO INFO
+        # =========================
 
-    fig_spec, ax2 = plt.subplots(figsize=(12,4))
+        duration = librosa.get_duration(
+            y=audio,
+            sr=sr
+        )
 
-    librosa.display.specshow(
-        spectrogram,
-        sr=sr,
-        x_axis='time',
-        y_axis='hz',
-        ax=ax2
-    )
+        st.write(f"Sample Rate: {sr} Hz")
 
-    st.pyplot(fig_spec)
+        st.write(f"Durasi Audio: {duration:.2f} detik")
 
-    # =========================
-    # FEATURE EXTRACTION
-    # =========================
+        # =========================
+        # WAVEFORM
+        # =========================
 
-    inputs = feature_extractor(
-        audio,
-        sampling_rate=16000,
-        return_tensors="pt",
-        padding=True
-    )
+        st.subheader("Waveform")
 
-    inputs = {
-        k: v.to(device)
-        for k, v in inputs.items()
-    }
+        fig_wave, ax = plt.subplots(
+            figsize=(12,4)
+        )
 
-    # =========================
-    # PREDICTION
-    # =========================
+        librosa.display.waveshow(
+            audio,
+            sr=sr,
+            ax=ax
+        )
 
-    with torch.no_grad():
+        ax.set_title("Waveform Audio")
 
-        logits = model(**inputs).logits
+        st.pyplot(fig_wave)
 
-        probs = F.softmax(logits, dim=-1)
+        # =========================
+        # SPECTROGRAM
+        # =========================
 
-        predicted_id = torch.argmax(
-            probs,
-            dim=-1
-        ).item()
+        st.subheader("Spectrogram")
 
-    label = model.config.id2label[predicted_id]
+        spectrogram = librosa.amplitude_to_db(
+            np.abs(librosa.stft(audio)),
+            ref=np.max
+        )
 
-    confidence = probs[0][predicted_id].item() * 100
+        fig_spec, ax2 = plt.subplots(
+            figsize=(12,4)
+        )
 
-    # =========================
-    # RESULT
-    # =========================
+        img = librosa.display.specshow(
+            spectrogram,
+            sr=sr,
+            x_axis='time',
+            y_axis='hz',
+            ax=ax2
+        )
 
-    st.subheader("Prediction Result")
+        fig_spec.colorbar(
+            img,
+            ax=ax2,
+            format="%+2.0f dB"
+        )
 
-    st.success(
-        f"Predicted Emotion: {label}"
-    )
+        ax2.set_title("Spectrogram Audio")
 
-    st.info(
-        f"Confidence: {confidence:.2f}%"
-    )
+        st.pyplot(fig_spec)
 
-    # =========================
-    # PROBABILITY CHART
-    # =========================
+        # =========================
+        # FEATURE EXTRACTION
+        # =========================
 
-    st.subheader("Emotion Probabilities")
+        inputs = feature_extractor(
+            audio,
+            sampling_rate=16000,
+            return_tensors="pt",
+            padding=True
+        )
 
-    all_probs = {
-        model.config.id2label[i]:
-        round(prob.item() * 100, 2)
+        inputs = {
+            k: v.to(device)
+            for k, v in inputs.items()
+        }
 
-        for i, prob in enumerate(probs[0])
-    }
+        # =========================
+        # PREDICTION
+        # =========================
 
-    st.bar_chart(all_probs)
+        with torch.no_grad():
+
+            logits = model(**inputs).logits
+
+            probs = F.softmax(
+                logits,
+                dim=-1
+            )
+
+            predicted_id = torch.argmax(
+                probs,
+                dim=-1
+            ).item()
+
+        label = model.config.id2label[
+            predicted_id
+        ]
+
+        confidence = (
+            probs[0][predicted_id].item() * 100
+        )
+
+        # =========================
+        # RESULT
+        # =========================
+
+        st.subheader("Prediction Result")
+
+        st.success(
+            f"Predicted Emotion: {label}"
+        )
+
+        st.info(
+            f"Confidence: {confidence:.2f}%"
+        )
+
+        # =========================
+        # ALL PROBABILITIES
+        # =========================
+
+        st.subheader("Emotion Probabilities")
+
+        all_probs = {
+
+            model.config.id2label[i]:
+            round(prob.item() * 100, 2)
+
+            for i, prob in enumerate(probs[0])
+        }
+
+        st.bar_chart(all_probs)
+
+    except Exception as e:
+
+        st.error(
+            f"Gagal memproses audio: {str(e)}"
+        )
+
+    finally:
+
+        # hapus temp file
+        if 'temp_path' in locals():
+
+            if os.path.exists(temp_path):
+
+                os.remove(temp_path)
